@@ -8,7 +8,11 @@ A modern network information tool for Linux that shows you everything about your
 
 `netinfo` shows you detailed information about your network connections, WiFi, devices on your network, open ports, DNS settings, and more. 
 ## Screenshot
+<img width="999" height="706" alt="Screenshot_20260216_003957" src="https://github.com/user-attachments/assets/11da3bfd-cf64-4cb2-927b-73b35856e6cf" />
 
+<img width="1001" height="702" alt="Screenshot_20260216_004132" src="https://github.com/user-attachments/assets/d5309514-7e4e-464e-94ee-585a81a574e8" />
+
+<img width="1007" height="328" alt="Screenshot_20260216_004531" src="https://github.com/user-attachments/assets/69809a47-26a9-4a0b-aa02-bc3e3de0159d" />
 
 
 ## Features
