@@ -218,10 +218,48 @@ def check_vpn_status(interfaces: List[Dict]) -> str:
 
 def check_proxy_status() -> str:
     """Check if proxy is configured"""
-    proxy_vars = ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']
+    proxy_info = []
+    
+    # Check environment variables
+    proxy_vars = ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']
     for var in proxy_vars:
-        if os.environ.get(var):
-            return f"Configured ({os.environ.get(var)})"
+        value = os.environ.get(var)
+        if value:
+            # Clean up the proxy URL for display
+            proxy_url = value.replace('http://', '').replace('https://', '')
+            if '@' in proxy_url:  # Remove credentials if present
+                proxy_url = proxy_url.split('@')[1]
+            return f"Configured ({proxy_url})"
+    
+    # Check system proxy settings (GNOME)
+    try:
+        result = subprocess.run(
+            ['gsettings', 'get', 'org.gnome.system.proxy', 'mode'],
+            capture_output=True,
+            text=True,
+            timeout=1
+        )
+        if result.returncode == 0 and 'manual' in result.stdout:
+            return "Configured (System)"
+    except Exception:
+        pass
+    
+    # Check for common proxy files
+    proxy_files = [
+        '/etc/environment',
+        os.path.expanduser('~/.bash_profile'),
+        os.path.expanduser('~/.bashrc'),
+    ]
+    
+    for filepath in proxy_files:
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read().lower()
+                if 'http_proxy=' in content or 'https_proxy=' in content:
+                    return "Configured (Shell)"
+        except Exception:
+            pass
+    
     return "Not Configured"
 
 def check_firewall_status() -> str:
@@ -907,6 +945,15 @@ def get_friendly_name(interface_name: str, itype: str) -> str:
     elif interface_name.startswith('tap'):
         num = interface_name.replace('tap', '')
         return f'VPN TAP {num}' if num else 'VPN TAP'
+    elif interface_name.startswith('wg'):
+        num = interface_name.replace('wg', '')
+        return f'WireGuard {num}' if num else 'WireGuard VPN'
+    elif interface_name.startswith('proton'):
+        return 'ProtonVPN'
+    elif interface_name.startswith('nordlynx'):
+        return 'NordVPN'
+    elif interface_name.startswith('mullvad'):
+        return 'Mullvad VPN'
     
     return interface_name
 
@@ -938,7 +985,7 @@ def get_interface_info(show_ipv6: bool = False, show_extended: bool = False) -> 
                     interface_info['type'] = 'bridge'
                 elif name.startswith('veth'):
                     interface_info['type'] = 'virtual'
-                elif name.startswith(('tun', 'tap')):
+                elif name.startswith(('tun', 'tap', 'wg', 'proton', 'nordlynx', 'mullvad')):
                     interface_info['type'] = 'vpn'
                 else:
                     interface_info['type'] = 'other'
@@ -952,6 +999,8 @@ def get_interface_info(show_ipv6: bool = False, show_extended: bool = False) -> 
                         operstate = f.read().strip()
                         interface_info['status'] = 'UP' if operstate == 'up' else 'DOWN' if operstate == 'down' else operstate.upper()
                 except Exception:
+                    # If operstate doesn't exist, check if interface has an IP (common for VPN interfaces)
+                    # This will be determined later when we try to get the IP
                     interface_info['status'] = 'UNKNOWN'
                 
                 # Get MAC address
@@ -977,6 +1026,10 @@ def get_interface_info(show_ipv6: bool = False, show_extended: bool = False) -> 
                     cidr = sum([bin(int(x)).count('1') for x in netmask.split('.')])
                     interface_info['ipv4'] = f"{ip_addr}/{cidr}"
                     s.close()
+                    
+                    # If interface has an IP and status is UNKNOWN, mark it as UP
+                    if interface_info['status'] == 'UNKNOWN':
+                        interface_info['status'] = 'UP'
                 except Exception:
                     interface_info['ipv4'] = '-'
                 
@@ -1449,7 +1502,7 @@ def main():
     parser.add_argument(
         '--version', '-v',
         action='version',
-        version=f'netinfo 2.0 (Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})'
+        version=f'netinfo 2.0.0 (Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})'
     )
     
     args = parser.parse_args()
