@@ -1,0 +1,471 @@
+#!/usr/bin/env python3
+"""
+netinfo - Network Interface Information Tool
+A clean, colorful tool to display network interface information
+"""
+
+import argparse
+import sys
+import json
+from typing import List, Dict, Optional, Tuple
+
+# ANSI color codes
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    
+    # Header - using cyan instead of purple
+    HEADER = '\033[96m'
+    HEADER_BOLD = '\033[1m\033[96m'
+    
+    # Status colors
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    
+    # Info colors
+    CYAN = '\033[96m'
+    BLUE = '\033[94m'
+    WHITE = '\033[97m'
+    GRAY = '\033[90m'
+
+def get_wifi_ssid(interface_name: str) -> Optional[str]:
+    """Get SSID for wireless interfaces"""
+    try:
+        import subprocess
+        # Try using iwgetid first
+        result = subprocess.run(
+            ['iwgetid', '-r', interface_name],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        
+        # Fallback to parsing iwconfig
+        result = subprocess.run(
+            ['iwconfig', interface_name],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            import re
+            match = re.search(r'ESSID:"([^"]*)"', result.stdout)
+            if match:
+                return match.group(1)
+    except:
+        pass
+    return None
+
+def get_mac_address(interface_name: str) -> str:
+    """Get MAC address for an interface"""
+    try:
+        with open(f'/sys/class/net/{interface_name}/address', 'r') as f:
+            return f.read().strip()
+    except:
+        return '-'
+
+def get_ipv6_address(interface_name: str) -> str:
+    """Get IPv6 address for an interface"""
+    try:
+        import socket
+        import fcntl
+        import struct
+        
+        # Read from /proc/net/if_inet6
+        with open('/proc/net/if_inet6', 'r') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 6 and parts[5] == interface_name:
+                    # Format the IPv6 address
+                    addr = parts[0]
+                    ipv6 = ':'.join([addr[i:i+4] for i in range(0, 32, 4)])
+                    # Compress the address
+                    import ipaddress
+                    compressed = str(ipaddress.IPv6Address(ipv6))
+                    prefix = parts[2]
+                    return f"{compressed}/{int(prefix, 16)}"
+    except:
+        pass
+    return '-'
+
+def get_default_gateway() -> Tuple[Optional[str], Optional[str]]:
+    """Get default gateway IP and interface"""
+    try:
+        with open('/proc/net/route', 'r') as f:
+            for line in f.readlines()[1:]:  # Skip header
+                fields = line.strip().split()
+                if fields[1] == '00000000':  # Default route (destination 0.0.0.0)
+                    gateway_hex = fields[2]
+                    # Convert hex to IP (reverse byte order)
+                    gateway_ip = '.'.join(
+                        str(int(gateway_hex[i:i+2], 16)) 
+                        for i in (6, 4, 2, 0)
+                    )
+                    interface = fields[0]
+                    return (gateway_ip, interface)
+    except:
+        pass
+    return (None, None)
+
+def get_friendly_name(interface_name: str, itype: str) -> str:
+    """Convert technical interface names to friendly names"""
+    # For common interface patterns
+    if interface_name == 'lo':
+        return 'Loopback'
+    elif interface_name.startswith('eth'):
+        num = interface_name.replace('eth', '')
+        return f'Ethernet {num}' if num else 'Ethernet'
+    elif interface_name.startswith('enp'):
+        # enp2s0 -> Ethernet
+        return 'Ethernet'
+    elif interface_name.startswith('eno'):
+        num = interface_name.replace('eno', '')
+        return f'Ethernet {num}' if num else 'Ethernet'
+    elif interface_name.startswith('ens'):
+        num = interface_name.replace('ens', '')
+        return f'Ethernet {num}' if num else 'Ethernet'
+    elif interface_name.startswith('wlan'):
+        num = interface_name.replace('wlan', '')
+        return f'WiFi {num}' if num else 'WiFi'
+    elif interface_name.startswith('wlp'):
+        return 'WiFi'
+    elif interface_name.startswith('wlo'):
+        num = interface_name.replace('wlo', '')
+        return f'WiFi {num}' if num else 'WiFi'
+    elif interface_name.startswith('docker'):
+        return 'Docker Bridge'
+    elif interface_name.startswith('br-'):
+        return 'Bridge'
+    elif interface_name.startswith('veth'):
+        return 'Virtual Ethernet'
+    elif interface_name.startswith('tun'):
+        num = interface_name.replace('tun', '')
+        return f'VPN Tunnel {num}' if num else 'VPN Tunnel'
+    elif interface_name.startswith('tap'):
+        num = interface_name.replace('tap', '')
+        return f'VPN TAP {num}' if num else 'VPN TAP'
+    
+    # Fallback to original name
+    return interface_name
+
+def get_interface_info(show_ipv6: bool = False) -> List[Dict[str, str]]:
+    """Get information about all network interfaces"""
+    interfaces = []
+    
+    try:
+        import socket
+        import fcntl
+        import struct
+        import os
+        
+        # Get all interface names from /sys/class/net
+        net_path = '/sys/class/net'
+        
+        if os.path.exists(net_path):
+            interface_names = os.listdir(net_path)
+            
+            for name in sorted(interface_names):
+                interface_info = {}
+                interface_info['device'] = name
+                
+                # Determine interface type first
+                if name == 'lo':
+                    interface_info['type'] = 'loopback'
+                elif name.startswith(('eth', 'enp', 'eno', 'ens')):
+                    interface_info['type'] = 'ethernet'
+                elif name.startswith(('wlan', 'wlp', 'wlo')):
+                    interface_info['type'] = 'wifi'
+                elif name.startswith(('docker', 'br-')):
+                    interface_info['type'] = 'bridge'
+                elif name.startswith('veth'):
+                    interface_info['type'] = 'virtual'
+                elif name.startswith(('tun', 'tap')):
+                    interface_info['type'] = 'vpn'
+                else:
+                    interface_info['type'] = 'other'
+                
+                # Get friendly name
+                interface_info['name'] = get_friendly_name(name, interface_info['type'])
+                
+                # Check if interface is UP
+                try:
+                    with open(f'/sys/class/net/{name}/operstate', 'r') as f:
+                        operstate = f.read().strip()
+                        interface_info['status'] = 'UP' if operstate == 'up' else 'DOWN' if operstate == 'down' else operstate.upper()
+                except:
+                    interface_info['status'] = 'UNKNOWN'
+                
+                # Get MAC address
+                interface_info['mac'] = get_mac_address(name)
+                
+                # Get IPv4 address
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    ip_addr = socket.inet_ntoa(fcntl.ioctl(
+                        s.fileno(),
+                        0x8915,  # SIOCGIFADDR
+                        struct.pack('256s', name.encode()[:15])
+                    )[20:24])
+                    
+                    # Get netmask
+                    netmask = socket.inet_ntoa(fcntl.ioctl(
+                        s.fileno(),
+                        0x891b,  # SIOCGIFNETMASK
+                        struct.pack('256s', name.encode()[:15])
+                    )[20:24])
+                    
+                    # Convert netmask to CIDR
+                    cidr = sum([bin(int(x)).count('1') for x in netmask.split('.')])
+                    interface_info['ipv4'] = f"{ip_addr}/{cidr}"
+                    s.close()
+                except:
+                    interface_info['ipv4'] = '-'
+                
+                # Get IPv6 if requested
+                if show_ipv6:
+                    interface_info['ipv6'] = get_ipv6_address(name)
+                
+                # Get SSID for WiFi interfaces
+                interface_info['ssid'] = None
+                if interface_info['type'] == 'wifi' and interface_info['status'] == 'UP':
+                    ssid = get_wifi_ssid(name)
+                    if ssid:
+                        interface_info['ssid'] = ssid
+                
+                interfaces.append(interface_info)
+        else:
+            # Demo data for systems without /sys/class/net
+            interfaces = [
+                {'device': 'lo', 'name': 'Loopback', 'type': 'loopback', 'status': 'UP', 
+                 'mac': '00:00:00:00:00:00', 'ipv4': '127.0.0.1/8', 'ssid': None},
+                {'device': 'eth0', 'name': 'Ethernet', 'type': 'ethernet', 'status': 'UP', 
+                 'mac': '52:54:00:12:34:56', 'ipv4': '192.168.1.100/24', 'ssid': None},
+                {'device': 'wlan0', 'name': 'WiFi', 'type': 'wifi', 'status': 'UP', 
+                 'mac': 'a4:5e:60:c8:9a:bc', 'ipv4': '10.0.0.45/24', 'ssid': 'MyHomeWiFi'},
+                {'device': 'docker0', 'name': 'Docker Bridge', 'type': 'bridge', 'status': 'DOWN', 
+                 'mac': '02:42:3f:8e:d1:a7', 'ipv4': '-', 'ssid': None},
+                {'device': 'tun0', 'name': 'VPN Tunnel', 'type': 'vpn', 'status': 'UP', 
+                 'mac': '-', 'ipv4': '10.8.0.2/24', 'ssid': None},
+            ]
+            if show_ipv6:
+                for iface in interfaces:
+                    if iface['device'] == 'lo':
+                        iface['ipv6'] = '::1/128'
+                    elif iface['status'] == 'UP' and iface['ipv4'] != '-':
+                        iface['ipv6'] = 'fe80::a00:27ff:fe4e:66a1/64'
+                    else:
+                        iface['ipv6'] = '-'
+            
+    except Exception as e:
+        print(f"{Colors.RED}Error: Unable to fetch network information: {e}{Colors.RESET}")
+        return []
+    
+    return interfaces
+
+def colorize_status(status: str, use_color: bool) -> str:
+    """Apply color to status based on state"""
+    if not use_color:
+        return status
+    
+    status_upper = status.upper()
+    if status_upper == 'UP':
+        return f"{Colors.GREEN}{status_upper}{Colors.RESET}"
+    elif status_upper == 'DOWN':
+        return f"{Colors.RED}{status_upper}{Colors.RESET}"
+    else:
+        return f"{Colors.YELLOW}{status_upper}{Colors.RESET}"
+
+def colorize_text(text: str, color: str, use_color: bool) -> str:
+    """Apply color to text"""
+    if not use_color or text == '-':
+        return text
+    return f"{color}{text}{Colors.RESET}"
+
+def print_json(interfaces: List[Dict[str, str]], show_gateway: bool = True):
+    """Print interfaces in JSON format"""
+    output = {
+        'interfaces': interfaces
+    }
+    
+    if show_gateway:
+        gateway_ip, gateway_iface = get_default_gateway()
+        if gateway_ip:
+            output['default_gateway'] = {
+                'ip': gateway_ip,
+                'interface': gateway_iface
+            }
+    
+    print(json.dumps(output, indent=2))
+
+def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_ipv6: bool = False):
+    """Print interfaces in a clean tabular format"""
+    if not interfaces:
+        error_msg = "No network interfaces found"
+        print(f"{Colors.RED}{error_msg}{Colors.RESET}" if use_color else error_msg)
+        return
+    
+    # Sort interfaces by status: UP first, DOWN second, UNKNOWN/other last
+    status_priority = {'UP': 0, 'DOWN': 1, 'UNKNOWN': 2}
+    interfaces.sort(key=lambda x: status_priority.get(x['status'].upper(), 3))
+    
+    # Determine which columns to show
+    columns = ['name', 'device', 'mac', 'status', 'ipv4']
+    headers = {'name': 'NAME', 'device': 'DEVICE', 'mac': 'MAC ADDRESS', 
+               'status': 'STATUS', 'ipv4': 'IPv4 ADDRESS'}
+    
+    # Add SSID column if any interface has SSID
+    has_ssid = any(i.get('ssid') for i in interfaces)
+    if has_ssid:
+        columns.insert(3, 'ssid')
+        headers['ssid'] = 'SSID'
+    
+    # Add IPv6 if requested
+    if show_ipv6:
+        columns.append('ipv6')
+        headers['ipv6'] = 'IPv6 ADDRESS'
+    
+    # Calculate column widths
+    col_widths = {}
+    for col in columns:
+        if col == 'ssid':
+            # SSID column width
+            ssid_values = [i.get('ssid', '') or '' for i in interfaces]
+            col_widths[col] = max(len(headers[col]), max(len(s) for s in ssid_values) if ssid_values else 0)
+        else:
+            col_widths[col] = max(len(headers[col]), max(len(str(i.get(col, '-'))) for i in interfaces))
+    
+    # Print header
+    header_parts = []
+    for col in columns:
+        header_parts.append(f"{headers[col]:<{col_widths[col]}}")
+    
+    header_line = "  ".join(header_parts)
+    if use_color:
+        print(f"{Colors.HEADER_BOLD}{header_line}{Colors.RESET}")
+    else:
+        print(header_line)
+    
+    # Print separator
+    total_width = sum(col_widths.values()) + (len(columns) - 1) * 2
+    separator = '─' * total_width
+    if use_color:
+        print(f"{Colors.HEADER}{separator}{Colors.RESET}")
+    else:
+        print(separator)
+    
+    # Print each interface
+    for interface in interfaces:
+        row_parts = []
+        
+        for col in columns:
+            value = str(interface.get(col, '-'))
+            
+            # Handle SSID - show empty if None
+            if col == 'ssid':
+                value = interface.get('ssid') or '-'
+            
+            # Apply colors
+            if col == 'status':
+                colored_value = colorize_status(value, use_color)
+                padding = col_widths[col] - len(value)
+            elif col == 'name':
+                colored_value = colorize_text(value, Colors.WHITE, use_color)
+                padding = col_widths[col] - len(value)
+            elif col == 'device':
+                colored_value = colorize_text(value, Colors.GRAY, use_color)
+                padding = col_widths[col] - len(value)
+            elif col == 'mac':
+                colored_value = colorize_text(value, Colors.CYAN, use_color)
+                padding = col_widths[col] - len(value)
+            elif col in ['ipv4', 'ipv6']:
+                colored_value = colorize_text(value, Colors.BLUE, use_color)
+                padding = col_widths[col] - len(value)
+            elif col == 'ssid':
+                colored_value = colorize_text(value, Colors.YELLOW, use_color)
+                padding = col_widths[col] - len(value)
+            else:
+                colored_value = value
+                padding = col_widths[col] - len(value)
+            
+            row_parts.append(colored_value + ' ' * padding)
+        
+        print("  ".join(row_parts))
+    
+    # Print gateway information
+    gateway_ip, gateway_iface = get_default_gateway()
+    if gateway_ip:
+        print()
+        gateway_text = f"Default Gateway: {gateway_ip}"
+        if gateway_iface:
+            gateway_text += f" (via {gateway_iface})"
+        
+        if use_color:
+            print(f"{Colors.CYAN}{gateway_text}{Colors.RESET}")
+        else:
+            print(gateway_text)
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='netinfo',
+        description='🌐 Network Interface Information Tool - A clean, colorful alternative to ifconfig',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  netinfo                 Show all network interfaces
+  netinfo --ipv6          Include IPv6 addresses
+  netinfo --active        Show only active (UP) interfaces
+  netinfo --json          Output in JSON format
+  netinfo --no-color      Disable colors (for piping)
+        """
+    )
+    
+    parser.add_argument(
+        '--no-color',
+        action='store_true',
+        help='Disable colored output'
+    )
+    
+    parser.add_argument(
+        '--ipv6', '-6',
+        action='store_true',
+        help='Show IPv6 addresses'
+    )
+    
+    parser.add_argument(
+        '--active', '-a',
+        action='store_true',
+        help='Show only active (UP) interfaces'
+    )
+    
+    parser.add_argument(
+        '--json', '-j',
+        action='store_true',
+        help='Output in JSON format (for scripting)'
+    )
+    
+    parser.add_argument(
+        '--version', '-v',
+        action='version',
+        version=f'netinfo 1.0.0 (Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})'
+    )
+    
+    args = parser.parse_args()
+    
+    # Get interface information
+    interfaces = get_interface_info(show_ipv6=args.ipv6)
+    
+    # Filter for active interfaces if requested
+    if args.active:
+        interfaces = [i for i in interfaces if i['status'].upper() == 'UP']
+    
+    # Output format
+    if args.json:
+        print_json(interfaces)
+    else:
+        print_table(interfaces, use_color=not args.no_color, show_ipv6=args.ipv6)
+
+if __name__ == '__main__':
+    main()
