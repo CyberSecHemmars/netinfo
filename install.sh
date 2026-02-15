@@ -34,6 +34,7 @@ else
         echo "⚠️  Warning: $HOME/.local/bin is not in your PATH"
         echo "Add this line to your ~/.bashrc or ~/.zshrc:"
         echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+        echo "    source ~/.zshrc"
     fi
 fi
 
