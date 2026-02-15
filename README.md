@@ -63,12 +63,6 @@ Show everything (full network information):
 netinfo all
 ```
 
-Show devices on your network:
-```bash
-netinfo all
-# Devices are listed in the "Local Network Devices" section
-```
-
 Show routing table:
 ```bash
 netinfo routes
