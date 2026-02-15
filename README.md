@@ -25,8 +25,23 @@ A modern network information tool for Linux that shows you everything about your
 - **Export to JSON** - Save all network info for later
 
 ## Installation
+## Installation
 
-### Quick Install
+### Method 1: Using the Installer (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/CyberSecHemmars/netinfo.git
+cd netinfo
+
+# Run the installer
+chmod +x install.sh
+sudo ./install.sh       # System-wide install
+# OR
+./install.sh            # User install (no sudo needed)
+```
+
+### Method 2: Quick Manual Install
 
 ```bash
 # Download the script
@@ -40,7 +55,7 @@ sudo mv netinfo /usr/local/bin/
 netinfo
 ```
 
-### From Source
+### Method 3: From Source
 
 ```bash
 git clone https://github.com/CyberSecHemmars/netinfo.git
