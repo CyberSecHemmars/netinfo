@@ -1,10 +1,9 @@
 #!/bin/bash
 # netinfo installation script
-
 set -e
 
 echo "╔═══════════════════════════════════════╗"
-echo "║  netinfo Installation Script          ║"
+echo "║  netinfo v2.0.0 Installer             ║"
 echo "╚═══════════════════════════════════════╝"
 echo ""
 
@@ -17,6 +16,13 @@ fi
 
 PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1-2)
 echo "✓ Python $PYTHON_VERSION found"
+
+# Check if netinfo file exists in current directory
+if [ ! -f "netinfo" ]; then
+    echo "❌ Error: netinfo script not found in current directory"
+    echo "Please run this installer from the netinfo directory"
+    exit 1
+fi
 
 # Check if running as root for system-wide install
 if [ "$EUID" -eq 0 ]; then
@@ -33,8 +39,10 @@ else
         echo ""
         echo "⚠️  Warning: $HOME/.local/bin is not in your PATH"
         echo "Add this line to your ~/.bashrc or ~/.zshrc:"
+        echo ""
         echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-        echo "    source ~/.zshrc"
+        echo ""
+        echo "Then run: source ~/.bashrc (or source ~/.zshrc)"
     fi
 fi
 
@@ -52,14 +60,14 @@ if command -v iwconfig &> /dev/null || command -v iwgetid &> /dev/null; then
     echo "✓ Wireless tools found (WiFi SSID detection available)"
 else
     echo "⚠️  Wireless tools not found (WiFi SSID detection unavailable)"
-    echo "   Install with: sudo apt install wireless-tools"
+    echo "   Install with:"
+    echo "     Ubuntu/Debian: sudo apt install wireless-tools"
+    echo "     Fedora:        sudo dnf install wireless-tools"
+    echo "     Arch:          sudo pacman -S wireless_tools"
 fi
 
 echo ""
 echo "╔═══════════════════════════════════════╗"
 echo "║  Installation Complete! 🎉            ║"
 echo "╚═══════════════════════════════════════╝"
-echo ""
-echo "Run 'netinfo' to get started"
-echo "Run 'netinfo --help' for more options"
 echo ""
