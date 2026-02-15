@@ -51,7 +51,7 @@ chmod +x netinfo
 sudo cp netinfo /usr/local/bin/
 ```
 
-### Create an Alias
+### Create an Alias [Optional]
 
 If you prefer to keep it in your home directory or want to use a custom name:
 
