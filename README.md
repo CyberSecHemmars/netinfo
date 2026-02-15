@@ -25,7 +25,6 @@ A modern network information tool for Linux that shows you everything about your
 - **Export to JSON** - Save all network info for later
 
 ## Installation
-## Installation
 
 ### Method 1: Using the Installer (Recommended)
 
