@@ -34,7 +34,7 @@ Docker Bridge  docker0  02:42:3f:8e:d1:a7  -           DOWN    -
 
 ```bash
 # Download the script
-curl -O https://raw.githubusercontent.com/yourusername/netinfo/main/netinfo
+curl -O https://raw.githubusercontent.com/CyberSecHemmars/netinfo/main/netinfo
 chmod +x netinfo
 
 # Move to system path (optional)
@@ -45,7 +45,7 @@ sudo mv netinfo /usr/local/bin/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/netinfo.git
+git clone https://github.com/CyberSecHemmars/netinfo.git
 cd netinfo
 
 # Make executable
