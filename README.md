@@ -6,8 +6,7 @@ A modern network information tool for Linux that shows you everything about your
 
 ## What does it do?
 
-`netinfo` shows you detailed information about your network connections, WiFi, devices on your network, open ports, DNS settings, and more. Think of it as a Swiss Army knife for network information.
-
+`netinfo` shows you detailed information about your network connections, WiFi, devices on your network, open ports, DNS settings, and more. 
 ## Screenshot
 
 
