@@ -23,7 +23,7 @@ A clean, colorful network interface information tool for Linux. A modern alterna
 
 ## Installation
 
-### Quick Install
+### Quick Install [Recommended]
 
 ```bash
 # Download the script
@@ -165,18 +165,6 @@ The tool uses a carefully chosen color palette for readability:
 | Bridge     | `docker`, `br-`                   | Bridge/Docker   |
 | VPN        | `tun`, `tap`                      | VPN Tunnel/TAP  |
 | Virtual    | `veth`                            | Virtual Ethernet|
-
-## Comparison with Traditional Tools
-
-| Feature              | netinfo | ifconfig | ip addr | nmcli |
-|----------------------|---------|----------|---------|-------|
-| Clean table format   | ✅      | ❌       | ❌      | ✅    |
-| Color-coded status   | ✅      | ❌       | ❌      | ❌    |
-| WiFi SSID shown      | ✅      | ❌       | ❌      | ✅    |
-| Friendly names       | ✅      | ❌       | ❌      | ✅    |
-| Single command       | ✅      | ✅       | ✅      | ❌    |
-| No dependencies      | ✅      | ⚠️       | ⚠️      | ❌    |
-| Easy to read         | ✅      | ❌       | ❌      | ⚠️    |
 
 ## Troubleshooting
 
