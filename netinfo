@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """
 netinfo - Network Interface Information Tool
-A clean, colorful tool to display network interface information
+A comprehensive, colorful tool to display network interface and security information
 """
 
 import argparse
 import sys
-from typing import List, Dict, Optional
+import json
+import socket
+import subprocess
+import time
+import os
+import re
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime, timedelta
 
 # ANSI color codes
 class Colors:
     RESET = '\033[0m'
     BOLD = '\033[1m'
     
-    # Header - using cyan instead of purple
+    # Header colors
     HEADER = '\033[96m'
     HEADER_BOLD = '\033[1m\033[96m'
     
@@ -27,11 +34,11 @@ class Colors:
     BLUE = '\033[94m'
     WHITE = '\033[97m'
     GRAY = '\033[90m'
+    MAGENTA = '\033[95m'
 
 def get_wifi_ssid(interface_name: str) -> Optional[str]:
     """Get SSID for wireless interfaces"""
     try:
-        import subprocess
         # Try using iwgetid first
         result = subprocess.run(
             ['iwgetid', '-r', interface_name],
@@ -50,11 +57,10 @@ def get_wifi_ssid(interface_name: str) -> Optional[str]:
             timeout=2
         )
         if result.returncode == 0:
-            import re
             match = re.search(r'ESSID:"([^"]*)"', result.stdout)
             if match:
                 return match.group(1)
-    except:
+    except Exception:
         pass
     return None
 
@@ -63,16 +69,59 @@ def get_mac_address(interface_name: str) -> str:
     try:
         with open(f'/sys/class/net/{interface_name}/address', 'r') as f:
             return f.read().strip()
-    except:
+    except Exception:
+        return '-'
+
+def get_interface_speed(interface_name: str) -> str:
+    """Get link speed for an interface"""
+    try:
+        with open(f'/sys/class/net/{interface_name}/speed', 'r') as f:
+            speed = int(f.read().strip())
+            if speed > 0:
+                if speed >= 1000:
+                    return f"{speed // 1000} Gbps"
+                return f"{speed} Mbps"
+    except Exception:
+        pass
+    return '-'
+
+def get_interface_mtu(interface_name: str) -> str:
+    """Get MTU for an interface"""
+    try:
+        with open(f'/sys/class/net/{interface_name}/mtu', 'r') as f:
+            return f.read().strip()
+    except Exception:
+        return '-'
+
+def get_interface_uptime(interface_name: str) -> str:
+    """Get uptime for an interface"""
+    try:
+        # Check carrier (link is up)
+        with open(f'/sys/class/net/{interface_name}/carrier', 'r') as f:
+            if f.read().strip() != '1':
+                return '-'
+        
+        # Get system uptime
+        with open('/proc/uptime', 'r') as f:
+            uptime_seconds = float(f.read().split()[0])
+        
+        uptime = timedelta(seconds=int(uptime_seconds))
+        days = uptime.days
+        hours = uptime.seconds // 3600
+        minutes = (uptime.seconds % 3600) // 60
+        
+        if days > 0:
+            return f"{days}d {hours}h"
+        elif hours > 0:
+            return f"{hours}h {minutes}m"
+        else:
+            return f"{minutes}m"
+    except Exception:
         return '-'
 
 def get_ipv6_address(interface_name: str) -> str:
     """Get IPv6 address for an interface"""
     try:
-        import socket
-        import fcntl
-        import struct
-        
         # Read from /proc/net/if_inet6
         with open('/proc/net/if_inet6', 'r') as f:
             for line in f:
@@ -86,20 +135,751 @@ def get_ipv6_address(interface_name: str) -> str:
                     compressed = str(ipaddress.IPv6Address(ipv6))
                     prefix = parts[2]
                     return f"{compressed}/{int(prefix, 16)}"
-    except:
+    except Exception:
         pass
     return '-'
 
+def get_default_gateway() -> Tuple[Optional[str], Optional[str]]:
+    """Get default gateway IP and interface"""
+    try:
+        with open('/proc/net/route', 'r') as f:
+            for line in f.readlines()[1:]:  # Skip header
+                fields = line.strip().split()
+                if fields[1] == '00000000':  # Default route
+                    gateway_hex = fields[2]
+                    # Convert hex to IP (reverse byte order)
+                    gateway_ip = '.'.join(
+                        str(int(gateway_hex[i:i+2], 16)) 
+                        for i in (6, 4, 2, 0)
+                    )
+                    interface = fields[0]
+                    return (gateway_ip, interface)
+    except Exception:
+        pass
+    return (None, None)
+
+def get_dns_servers() -> List[str]:
+    """Get DNS servers from /etc/resolv.conf"""
+    dns_servers = []
+    try:
+        with open('/etc/resolv.conf', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('nameserver'):
+                    dns = line.split()[1]
+                    dns_servers.append(dns)
+    except Exception:
+        pass
+    return dns_servers
+
+def get_public_ip_info() -> Dict[str, str]:
+    """Get public IP information from API"""
+    try:
+        import urllib.request
+        import urllib.error
+        
+        # Try ipapi.co first
+        try:
+            with urllib.request.urlopen('https://ipapi.co/json/', timeout=5) as response:
+                data = json.loads(response.read().decode())
+                return {
+                    'ip': data.get('ip', 'N/A'),
+                    'isp': data.get('org', 'N/A'),
+                    'asn': data.get('asn', 'N/A'),
+                    'city': data.get('city', 'N/A'),
+                    'country': data.get('country_name', 'N/A')
+                }
+        except Exception:
+            # Fallback to ip-api.com (use HTTPS)
+            with urllib.request.urlopen('https://ip-api.com/json/', timeout=5) as response:
+                data = json.loads(response.read().decode())
+                return {
+                    'ip': data.get('query', 'N/A'),
+                    'isp': data.get('isp', 'N/A'),
+                    'asn': data.get('as', 'N/A'),
+                    'city': data.get('city', 'N/A'),
+                    'country': data.get('country', 'N/A')
+                }
+    except Exception:
+        return {
+            'ip': 'Unable to fetch',
+            'isp': 'N/A',
+            'asn': 'N/A',
+            'city': 'N/A',
+            'country': 'N/A'
+        }
+
+def check_vpn_status(interfaces: List[Dict]) -> str:
+    """Check if VPN is connected"""
+    for iface in interfaces:
+        if iface['type'] == 'vpn' and iface['status'] == 'UP':
+            return f"Connected ({iface['device']})"
+    return "Not Connected"
+
+def check_proxy_status() -> str:
+    """Check if proxy is configured"""
+    proxy_vars = ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']
+    for var in proxy_vars:
+        if os.environ.get(var):
+            return f"Configured ({os.environ.get(var)})"
+    return "Not Configured"
+
+def check_firewall_status() -> str:
+    """Check firewall status"""
+    try:
+        # Check ufw
+        result = subprocess.run(['ufw', 'status'], capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            if 'Status: active' in result.stdout:
+                return "Active (ufw)"
+            else:
+                return "Inactive (ufw)"
+    except Exception:
+        pass
+    
+    try:
+        # Check iptables
+        result = subprocess.run(['iptables', '-L', '-n'], capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 5:  # Has rules beyond default chains
+                return "Active (iptables)"
+    except Exception:
+        pass
+    
+    return "Unknown"
+
+def populate_arp_table():
+    """Populate ARP table by pinging local network"""
+    try:
+        import fcntl
+        import struct
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        # Get the active interface's IP
+        net_path = '/sys/class/net'
+        local_ip = None
+        
+        if os.path.exists(net_path):
+            for iface in os.listdir(net_path):
+                if iface not in ['lo', 'docker0']:
+                    try:
+                        with open(f'/sys/class/net/{iface}/operstate', 'r') as f:
+                            if f.read().strip() == 'up':
+                                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                                local_ip = socket.inet_ntoa(fcntl.ioctl(
+                                    s.fileno(),
+                                    0x8915,
+                                    struct.pack('256s', iface.encode()[:15])
+                                )[20:24])
+                                s.close()
+                                break
+                    except Exception:
+                        continue
+        
+        if not local_ip:
+            return
+        
+        # Get network prefix (e.g., 192.168.0)
+        ip_parts = local_ip.split('.')
+        network_prefix = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}"
+        
+        # Ping common IPs in parallel (much faster)
+        def ping_ip(ip):
+            try:
+                subprocess.run(['ping', '-c', '1', '-W', '1', ip], 
+                             capture_output=True, timeout=2)
+            except Exception:
+                pass
+        
+        # Ping gateway, common IPs, and scan range
+        ips_to_ping = [
+            f"{network_prefix}.1",    # Router
+            f"{network_prefix}.254",  # Common router
+        ]
+        
+        # Add range scan (1-20 and 100-110 for speed)
+        for i in list(range(1, 21)) + list(range(100, 111)):
+            ips_to_ping.append(f"{network_prefix}.{i}")
+        
+        # Use thread pool for parallel pinging
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(ping_ip, ip) for ip in ips_to_ping]
+            for future in as_completed(futures, timeout=3):
+                pass
+        
+        # Give ARP table a moment to update
+        time.sleep(0.5)
+        
+    except Exception:
+        pass
+
+def get_local_devices() -> List[Dict[str, str]]:
+    """Get devices on local network from ARP table with enhanced detection"""
+    devices = []
+    
+    # Populate ARP table first
+    populate_arp_table()
+    
+    try:
+        gateway_ip, gateway_iface = get_default_gateway()
+        gateway_added = False
+        
+        with open('/proc/net/arp', 'r') as f:
+            lines = f.readlines()[1:]  # Skip header
+            
+            # Debug: print what we found
+            if os.environ.get('DEBUG_NETINFO'):
+                print(f"\n[DEBUG] ARP table has {len(lines)} entries")
+                print(f"[DEBUG] Gateway IP: {gateway_ip}")
+            
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 6:
+                    ip = parts[0]
+                    hw_type = parts[1]
+                    flags = parts[2]
+                    mac = parts[3]
+                    mask = parts[4]
+                    interface = parts[5]
+                    
+                    if os.environ.get('DEBUG_NETINFO'):
+                        print(f"[DEBUG] Entry: IP={ip}, MAC={mac}, Flags={flags}, Iface={interface}")
+                    
+                    # Skip invalid MAC addresses
+                    if mac == '00:00:00:00:00:00':
+                        if os.environ.get('DEBUG_NETINFO'):
+                            print(f"[DEBUG] Skipping {ip} - invalid MAC")
+                        continue
+                    
+                    # Skip incomplete entries (0x0 flags means incomplete)
+                    if flags == '0x0':
+                        if os.environ.get('DEBUG_NETINFO'):
+                            print(f"[DEBUG] Skipping {ip} - incomplete entry")
+                        continue
+                    
+                    # Handle gateway router specially
+                    if ip == gateway_ip:
+                        if os.environ.get('DEBUG_NETINFO'):
+                            print(f"[DEBUG] Found gateway: {ip}")
+                        
+                        # Check if admin interface is accessible
+                        admin_desc = "Gateway Router"
+                        if quick_port_check(ip, 80, timeout=0.3):
+                            admin_desc = f"Gateway Router (Admin: http://{ip})"
+                        elif quick_port_check(ip, 443, timeout=0.3):
+                            admin_desc = f"Gateway Router (Admin: https://{ip})"
+                        
+                        devices.insert(0, {  # Add gateway at the beginning
+                            'ip': ip,
+                            'mac': mac,
+                            'interface': interface,
+                            'description': admin_desc
+                        })
+                        gateway_added = True
+                        continue
+                    
+                    # Enhanced device identification
+                    if os.environ.get('DEBUG_NETINFO'):
+                        print(f"[DEBUG] Identifying device {ip}...")
+                    desc = identify_device(ip, mac)
+                    if os.environ.get('DEBUG_NETINFO'):
+                        print(f"[DEBUG] Device {ip} identified as: {desc}")
+                    
+                    devices.append({
+                        'ip': ip,
+                        'mac': mac,
+                        'interface': interface,
+                        'description': desc
+                    })
+        
+        # If gateway wasn't in ARP table but we know its IP, add it
+        if not gateway_added and gateway_ip:
+            admin_desc = "Gateway Router"
+            if quick_port_check(gateway_ip, 80, timeout=0.3):
+                admin_desc = f"Gateway Router (Admin: http://{gateway_ip})"
+            elif quick_port_check(gateway_ip, 443, timeout=0.3):
+                admin_desc = f"Gateway Router (Admin: https://{gateway_ip})"
+            
+            devices.insert(0, {
+                'ip': gateway_ip,
+                'mac': get_gateway_mac(gateway_ip),
+                'interface': gateway_iface or '-',
+                'description': admin_desc
+            })
+            
+    except Exception as e:
+        if os.environ.get('DEBUG_NETINFO'):
+            print(f"[DEBUG] Error reading ARP table: {e}")
+        pass
+    
+    return devices
+
+def get_gateway_mac(gateway_ip: str) -> str:
+    """Try to get gateway MAC address"""
+    try:
+        # Try from ARP table first
+        with open('/proc/net/arp', 'r') as f:
+            for line in f.readlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 4 and parts[0] == gateway_ip:
+                    mac = parts[3]
+                    if mac != '00:00:00:00:00:00':
+                        return mac
+    except Exception:
+        pass
+    
+    # Try arping
+    try:
+        result = subprocess.run(['arping', '-c', '1', '-I', 'wlan0', gateway_ip],
+                              capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            import re
+            match = re.search(r'\[([0-9A-Fa-f:]{17})\]', result.stdout)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+    
+    return '-'
+
+def is_randomized_mac(mac: str) -> bool:
+    """Check if MAC address is randomized/private"""
+    # Locally administered addresses have the second least significant bit of the first octet set
+    # In hex, this means: x2, x6, xA, xE in the second character
+    first_octet = mac.split(':')[0].upper()
+    if len(first_octet) == 2:
+        second_char = first_octet[1]
+        return second_char in ['2', '3', '6', '7', 'A', 'B', 'E', 'F']
+    return False
+
+def identify_device(ip: str, mac: str) -> str:
+    """Identify device using multiple detection methods"""
+    # Check if MAC is randomized
+    is_random_mac = is_randomized_mac(mac)
+    
+    # Try hostname resolution first (works even with random MACs)
+    hostname = get_device_hostname(ip)
+    if hostname and hostname != ip:
+        if is_random_mac:
+            return f"{hostname} (Private MAC)"
+        return f"{hostname}"
+    
+    # Try to detect device type by open ports
+    device_type = detect_device_by_ports(ip)
+    if device_type:
+        if is_random_mac:
+            return f"{device_type} (Private MAC)"
+        return device_type
+    
+    # If MAC is randomized, try to identify mobile OS type
+    if is_random_mac:
+        # Could be iPhone, Android, or other mobile device
+        # Without hostname, we can't reliably determine OS
+        return "Mobile Device (Private MAC)"
+    
+    # Fall back to MAC vendor identification (only works for real MACs)
+    return identify_device_by_mac(mac)
+
+def get_device_hostname(ip: str) -> Optional[str]:
+    """Try to get hostname via multiple methods"""
+    # Method 1: Reverse DNS lookup
+    try:
+        hostname, _, _ = socket.gethostbyaddr(ip)
+        # Clean up hostname - remove domain suffixes
+        if hostname and hostname != ip:
+            if '.' in hostname:
+                hostname = hostname.split('.')[0]
+            # Skip generic hostnames
+            if not hostname.startswith('_gateway') and hostname.lower() not in ['localhost', 'unknown']:
+                return hostname
+    except Exception:
+        pass
+    
+    # Method 2: Try nmblookup for Windows/Samba devices
+    try:
+        result = subprocess.run(
+            ['nmblookup', '-A', ip],
+            capture_output=True,
+            text=True,
+            timeout=1
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if '<00>' in line and not '<GROUP>' in line:
+                    parts = line.split()
+                    if parts:
+                        hostname = parts[0].strip()
+                        if hostname and hostname != ip:
+                            return hostname
+    except Exception:
+        pass
+    
+    # Method 3: Check /etc/hosts
+    try:
+        with open('/etc/hosts', 'r') as f:
+            for line in f:
+                if line.strip() and not line.startswith('#'):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] == ip:
+                        return parts[1]
+    except Exception:
+        pass
+    
+    # Method 4: Try avahi-resolve for mDNS/Bonjour
+    try:
+        result = subprocess.run(
+            ['avahi-resolve', '-a', ip],
+            capture_output=True,
+            text=True,
+            timeout=1
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split()
+            if len(parts) >= 2:
+                hostname = parts[1].replace('.local', '')
+                if hostname and hostname != ip:
+                    return hostname
+    except Exception:
+        pass
+    
+    return None
+
+def detect_device_by_ports(ip: str) -> Optional[str]:
+    """Detect device type based on common open ports"""
+    # Quick port checks (common services)
+    port_signatures = {
+        22: 'SSH Server',
+        80: 'Web Server',
+        443: 'HTTPS Server',
+        445: 'Windows/Samba Share',
+        548: 'macOS AFP Server',
+        631: 'Printer (IPP)',
+        8080: 'Web Server',
+        8443: 'Web Server (HTTPS)',
+        9000: 'Portainer/Docker',
+        5000: 'Synology NAS',
+        5001: 'Synology NAS',
+    }
+    
+    detected_services = []
+    
+    for port, service in list(port_signatures.items())[:3]:  # Check first 3 for speed
+        if quick_port_check(ip, port):
+            detected_services.append(service)
+    
+    if detected_services:
+        return detected_services[0]  # Return first detected service
+    
+    return None
+
+def quick_port_check(ip: str, port: int, timeout: float = 0.2) -> bool:
+    """Quick TCP port check"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((ip, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+def identify_device_by_mac(mac: str) -> str:
+    """Identify device type based on MAC address OUI (Organizational Unique Identifier)"""
+    # Extract first 3 octets (OUI)
+    oui = mac.upper().replace(':', '')[:6]
+    
+    # Common vendor OUIs and their typical devices
+    vendor_hints = {
+        # Apple devices
+        '001CB3': 'Apple Device', '0050E4': 'Apple Device', '0017F2': 'Apple Device',
+        '001E52': 'Apple Device', '001F5B': 'Apple Device', '0023DF': 'Apple Device',
+        '0025BC': 'Apple Device', '00264A': 'Apple Device', 'A4B197': 'Apple Device',
+        '3C0754': 'Apple Device', '0C7132': 'Apple Device', '28E14C': 'Apple Device',
+        '5C5948': 'Apple Device', '60C547': 'Apple Device', '64A5C3': 'Apple Device',
+        '7C0191': 'Apple Device', '8C8590': 'Apple Device', '9803D8': 'Apple Device',
+        
+        # Samsung devices
+        '002566': 'Samsung Device', '0015B9': 'Samsung Device', '001632': 'Samsung Device',
+        '5C0A5B': 'Samsung Device', '34BE00': 'Samsung Device', 'E4B021': 'Samsung Device',
+        '1C5A3E': 'Samsung Device', '503237': 'Samsung Device', '78521A': 'Samsung Device',
+        
+        # Xiaomi devices
+        '341210': 'Xiaomi Device', '50EC50': 'Xiaomi Device', '64B473': 'Xiaomi Device',
+        '78028C': 'Xiaomi Device', '7C1DD9': 'Xiaomi Device', '8CFABA': 'Xiaomi Device',
+        'A0B7F5': 'Xiaomi Device', 'C40BCB': 'Xiaomi Device', 'F8A45F': 'Xiaomi Device',
+        '28E14C': 'Xiaomi Device', '34CE00': 'Xiaomi Device', '68DFDD': 'Xiaomi Device',
+        
+        # OnePlus devices
+        'A86BAD': 'OnePlus Device', 'AC37432': 'OnePlus Device',
+        
+        # Huawei devices
+        '0025BC': 'Huawei Device', '00E0FC': 'Huawei Device', '4CA56D': 'Huawei Device',
+        '0C37DC': 'Huawei Device', '485B39': 'Huawei Device',
+        
+        # Oppo devices
+        '000D3A': 'Oppo Device', '1C99A4': 'Oppo Device', 'E83BAB': 'Oppo Device',
+        
+        # Vivo devices  
+        '70F087': 'Vivo Device', 'B8F6B1': 'Vivo Device',
+        
+        # Google devices (Pixel, Nest)
+        '54606E': 'Google Device', '68C63A': 'Google Device', 'F4F5E8': 'Google Pixel',
+        '7C6DF8': 'Google Device', '84C7EA': 'Google Device',
+        
+        # Raspberry Pi
+        'B827EB': 'Raspberry Pi', 'DCA632': 'Raspberry Pi', 'E45F01': 'Raspberry Pi',
+        
+        # TP-Link
+        '1C61B4': 'TP-Link Device', '5C628B': 'TP-Link Device', 'C006C3': 'TP-Link Device',
+        
+        # Amazon devices
+        'F0D2F1': 'Amazon Device', '84D6D0': 'Amazon Device', '44650D': 'Amazon Device',
+        
+        # Intel NUCs/Devices
+        'A4BF01': 'Intel Device', '001E68': 'Intel Device',
+    }
+    
+    # Check local database first
+    if oui in vendor_hints:
+        return vendor_hints[oui]
+    
+    # If not found, try online MAC vendor lookup
+    vendor = lookup_mac_vendor_online(mac)
+    if vendor:
+        return vendor
+    
+    return 'Network Device'
+
+def lookup_mac_vendor_online(mac: str) -> Optional[str]:
+    """Look up MAC vendor using online API"""
+    try:
+        import urllib.request
+        import urllib.error
+        
+        # Use macvendors.com API (free, no key required)
+        mac_formatted = mac.replace(':', '')[:6]
+        url = f'https://api.macvendors.com/{mac}'
+        
+        req = urllib.request.Request(url)
+        req.add_header('User-Agent', 'netinfo/1.0')
+        
+        with urllib.request.urlopen(req, timeout=2) as response:
+            vendor = response.read().decode('utf-8').strip()
+            if vendor and 'error' not in vendor.lower():
+                # Clean up vendor name
+                if ',' in vendor:
+                    vendor = vendor.split(',')[0]
+                # Limit length
+                if len(vendor) > 30:
+                    vendor = vendor[:27] + '...'
+                return f"{vendor} Device"
+    except Exception:
+        pass
+    
+    return None
+
+def get_routing_table() -> List[Dict[str, str]]:
+    """Get routing table entries"""
+    routes = []
+    try:
+        with open('/proc/net/route', 'r') as f:
+            lines = f.readlines()[1:]  # Skip header
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 8:
+                    iface = parts[0]
+                    dest_hex = parts[1]
+                    gateway_hex = parts[2]
+                    metric = parts[6]
+                    
+                    # Convert destination
+                    if dest_hex == '00000000':
+                        destination = '0.0.0.0/0'
+                        route_type = 'default'
+                    else:
+                        dest_ip = '.'.join(str(int(dest_hex[i:i+2], 16)) for i in (6, 4, 2, 0))
+                        # Get mask
+                        mask_hex = parts[7]
+                        mask = '.'.join(str(int(mask_hex[i:i+2], 16)) for i in (6, 4, 2, 0))
+                        # Convert to CIDR
+                        cidr = sum([bin(int(x)).count('1') for x in mask.split('.')])
+                        destination = f"{dest_ip}/{cidr}"
+                        route_type = 'local'
+                    
+                    # Convert gateway
+                    if gateway_hex == '00000000':
+                        gateway = '0.0.0.0'
+                    else:
+                        gateway = '.'.join(str(int(gateway_hex[i:i+2], 16)) for i in (6, 4, 2, 0))
+                    
+                    routes.append({
+                        'destination': destination,
+                        'gateway': gateway,
+                        'interface': iface,
+                        'metric': metric,
+                        'type': route_type
+                    })
+    except Exception:
+        pass
+    return routes
+
+def get_open_ports() -> List[Dict[str, str]]:
+    """Get open ports and listening services"""
+    ports = []
+    
+    def parse_port_file(filepath, protocol):
+        try:
+            with open(filepath, 'r') as f:
+                lines = f.readlines()[1:]  # Skip header
+                for line in lines:
+                    parts = line.split()
+                    if len(parts) < 10:
+                        continue
+                    
+                    # Check if listening (state 0A for TCP)
+                    state = parts[3]
+                    if protocol == 'TCP' and state != '0A':
+                        continue
+                    
+                    # Parse local address and port
+                    local_address = parts[1]
+                    addr_parts = local_address.split(':')
+                    if len(addr_parts) == 2:
+                        port_hex = addr_parts[1]
+                        port = int(port_hex, 16)
+                        
+                        # Get inode
+                        inode = parts[9]
+                        
+                        # Try to find process name
+                        process = get_process_by_inode(inode)
+                        
+                        # Guess service name
+                        service = get_service_name(port, protocol)
+                        
+                        ports.append({
+                            'port': str(port),
+                            'protocol': protocol,
+                            'service': service,
+                            'process': process
+                        })
+        except Exception:
+            pass
+    
+    parse_port_file('/proc/net/tcp', 'TCP')
+    parse_port_file('/proc/net/udp', 'UDP')
+    
+    # Sort by port number
+    ports.sort(key=lambda x: int(x['port']))
+    
+    return ports
+
+def get_process_by_inode(inode: str) -> str:
+    """Find process name by socket inode"""
+    try:
+        for pid in os.listdir('/proc'):
+            if not pid.isdigit():
+                continue
+            
+            fd_path = f'/proc/{pid}/fd'
+            try:
+                for fd in os.listdir(fd_path):
+                    fd_link = os.readlink(f'{fd_path}/{fd}')
+                    if f'socket:[{inode}]' in fd_link:
+                        # Get process name
+                        with open(f'/proc/{pid}/comm', 'r') as f:
+                            return f.read().strip()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return '-'
+
+def get_service_name(port: int, protocol: str) -> str:
+    """Get common service name for port"""
+    common_ports = {
+        20: 'FTP-DATA', 21: 'FTP', 22: 'SSH', 23: 'Telnet',
+        25: 'SMTP', 53: 'DNS', 80: 'HTTP', 110: 'POP3',
+        143: 'IMAP', 443: 'HTTPS', 465: 'SMTPS', 587: 'SMTP',
+        993: 'IMAPS', 995: 'POP3S', 3306: 'MySQL', 5432: 'PostgreSQL',
+        6379: 'Redis', 8080: 'HTTP-Alt', 27017: 'MongoDB',
+        631: 'IPP (Printing)', 3389: 'RDP', 5900: 'VNC'
+    }
+    return common_ports.get(port, '-')
+
+def test_dns_resolution() -> List[Dict[str, str]]:
+    """Test DNS resolution to common domains"""
+    test_domains = [
+        'google.com',
+        'cloudflare.com',
+        'github.com'
+    ]
+    
+    results = []
+    for domain in test_domains:
+        try:
+            start = time.time()
+            ip = socket.gethostbyname(domain)
+            latency = int((time.time() - start) * 1000)
+            results.append({
+                'domain': domain,
+                'ip': ip,
+                'status': 'success',
+                'latency': f"{latency}ms"
+            })
+        except Exception as e:
+            results.append({
+                'domain': domain,
+                'ip': '-',
+                'status': 'failed',
+                'latency': '-'
+            })
+    
+    return results
+
+def check_dns_leak(interfaces: List[Dict]) -> Dict[str, any]:
+    """Check for DNS leaks when VPN is connected"""
+    vpn_connected = any(i['type'] == 'vpn' and i['status'] == 'UP' for i in interfaces)
+    
+    if not vpn_connected:
+        return {
+            'status': 'no_vpn',
+            'message': 'VPN not connected - DNS leak check N/A'
+        }
+    
+    dns_servers = get_dns_servers()
+    
+    # Common public DNS servers that might indicate a leak
+    public_dns = [
+        '8.8.8.8', '8.8.4.4',  # Google
+        '1.1.1.1', '1.0.0.1',  # Cloudflare
+        '9.9.9.9',  # Quad9
+    ]
+    
+    leak_detected = any(dns in public_dns for dns in dns_servers)
+    
+    if leak_detected:
+        return {
+            'status': 'leak',
+            'message': 'Potential DNS leak detected',
+            'dns_servers': dns_servers
+        }
+    else:
+        return {
+            'status': 'safe',
+            'message': 'No DNS leak detected',
+            'dns_servers': dns_servers
+        }
+
 def get_friendly_name(interface_name: str, itype: str) -> str:
     """Convert technical interface names to friendly names"""
-    # For common interface patterns
     if interface_name == 'lo':
         return 'Loopback'
     elif interface_name.startswith('eth'):
         num = interface_name.replace('eth', '')
         return f'Ethernet {num}' if num else 'Ethernet'
     elif interface_name.startswith('enp'):
-        # enp2s0 -> Ethernet
         return 'Ethernet'
     elif interface_name.startswith('eno'):
         num = interface_name.replace('eno', '')
@@ -128,20 +908,16 @@ def get_friendly_name(interface_name: str, itype: str) -> str:
         num = interface_name.replace('tap', '')
         return f'VPN TAP {num}' if num else 'VPN TAP'
     
-    # Fallback to original name
     return interface_name
 
-def get_interface_info(show_ipv6: bool = False) -> List[Dict[str, str]]:
+def get_interface_info(show_ipv6: bool = False, show_extended: bool = False) -> List[Dict[str, str]]:
     """Get information about all network interfaces"""
     interfaces = []
     
     try:
-        import socket
         import fcntl
         import struct
-        import os
         
-        # Get all interface names from /sys/class/net
         net_path = '/sys/class/net'
         
         if os.path.exists(net_path):
@@ -151,7 +927,7 @@ def get_interface_info(show_ipv6: bool = False) -> List[Dict[str, str]]:
                 interface_info = {}
                 interface_info['device'] = name
                 
-                # Determine interface type first
+                # Determine interface type
                 if name == 'lo':
                     interface_info['type'] = 'loopback'
                 elif name.startswith(('eth', 'enp', 'eno', 'ens')):
@@ -175,7 +951,7 @@ def get_interface_info(show_ipv6: bool = False) -> List[Dict[str, str]]:
                     with open(f'/sys/class/net/{name}/operstate', 'r') as f:
                         operstate = f.read().strip()
                         interface_info['status'] = 'UP' if operstate == 'up' else 'DOWN' if operstate == 'down' else operstate.upper()
-                except:
+                except Exception:
                     interface_info['status'] = 'UNKNOWN'
                 
                 # Get MAC address
@@ -201,12 +977,18 @@ def get_interface_info(show_ipv6: bool = False) -> List[Dict[str, str]]:
                     cidr = sum([bin(int(x)).count('1') for x in netmask.split('.')])
                     interface_info['ipv4'] = f"{ip_addr}/{cidr}"
                     s.close()
-                except:
+                except Exception:
                     interface_info['ipv4'] = '-'
                 
                 # Get IPv6 if requested
                 if show_ipv6:
                     interface_info['ipv6'] = get_ipv6_address(name)
+                
+                # Get extended info if requested
+                if show_extended:
+                    interface_info['speed'] = get_interface_speed(name)
+                    interface_info['mtu'] = get_interface_mtu(name)
+                    interface_info['uptime'] = get_interface_uptime(name)
                 
                 # Get SSID for WiFi interfaces
                 interface_info['ssid'] = None
@@ -216,28 +998,6 @@ def get_interface_info(show_ipv6: bool = False) -> List[Dict[str, str]]:
                         interface_info['ssid'] = ssid
                 
                 interfaces.append(interface_info)
-        else:
-            # Demo data for systems without /sys/class/net
-            interfaces = [
-                {'device': 'lo', 'name': 'Loopback', 'type': 'loopback', 'status': 'UP', 
-                 'mac': '00:00:00:00:00:00', 'ipv4': '127.0.0.1/8', 'ssid': None},
-                {'device': 'eth0', 'name': 'Ethernet', 'type': 'ethernet', 'status': 'UP', 
-                 'mac': '52:54:00:12:34:56', 'ipv4': '192.168.1.100/24', 'ssid': None},
-                {'device': 'wlan0', 'name': 'WiFi', 'type': 'wifi', 'status': 'UP', 
-                 'mac': 'a4:5e:60:c8:9a:bc', 'ipv4': '10.0.0.45/24', 'ssid': 'MyHomeWiFi'},
-                {'device': 'docker0', 'name': 'Docker Bridge', 'type': 'bridge', 'status': 'DOWN', 
-                 'mac': '02:42:3f:8e:d1:a7', 'ipv4': '-', 'ssid': None},
-                {'device': 'tun0', 'name': 'VPN Tunnel', 'type': 'vpn', 'status': 'UP', 
-                 'mac': '-', 'ipv4': '10.8.0.2/24', 'ssid': None},
-            ]
-            if show_ipv6:
-                for iface in interfaces:
-                    if iface['device'] == 'lo':
-                        iface['ipv6'] = '::1/128'
-                    elif iface['status'] == 'UP' and iface['ipv4'] != '-':
-                        iface['ipv6'] = 'fe80::a00:27ff:fe4e:66a1/64'
-                    else:
-                        iface['ipv6'] = '-'
             
     except Exception as e:
         print(f"{Colors.RED}Error: Unable to fetch network information: {e}{Colors.RESET}")
@@ -264,7 +1024,19 @@ def colorize_text(text: str, color: str, use_color: bool) -> str:
         return text
     return f"{color}{text}{Colors.RESET}"
 
-def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_ipv6: bool = False):
+def print_section_header(title: str, use_color: bool):
+    """Print a section header"""
+    separator = '═' * 60
+    if use_color:
+        print(f"\n{Colors.HEADER}{separator}{Colors.RESET}")
+        print(f"{Colors.HEADER_BOLD}{title}{Colors.RESET}")
+        print(f"{Colors.HEADER}{separator}{Colors.RESET}")
+    else:
+        print(f"\n{separator}")
+        print(title)
+        print(separator)
+
+def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_ipv6: bool = False, show_extended: bool = False):
     """Print interfaces in a clean tabular format"""
     if not interfaces:
         error_msg = "No network interfaces found"
@@ -273,17 +1045,24 @@ def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_i
     
     # Sort interfaces by status: UP first, DOWN second, UNKNOWN/other last
     status_priority = {'UP': 0, 'DOWN': 1, 'UNKNOWN': 2}
-    interfaces.sort(key=lambda x: status_priority.get(x['status'].upper(), 3))
+    interfaces.sort(key=lambda x: status_priority.get(x.get('status', 'UNKNOWN').upper(), 3))
     
-    # Determine which columns to show
-    columns = ['name', 'device', 'mac', 'status', 'ipv4']
-    headers = {'name': 'NAME', 'device': 'DEVICE', 'mac': 'MAC ADDRESS', 
-               'status': 'STATUS', 'ipv4': 'IPv4 ADDRESS'}
+    # Determine columns
+    if show_extended:
+        columns = ['name', 'device', 'status', 'ipv4', 'speed', 'mtu', 'uptime']
+        headers = {
+            'name': 'NAME', 'device': 'DEVICE', 'status': 'STATUS',
+            'ipv4': 'IPv4 ADDRESS', 'speed': 'SPEED', 'mtu': 'MTU', 'uptime': 'UPTIME'
+        }
+    else:
+        columns = ['name', 'device', 'status', 'ipv4']
+        headers = {'name': 'NAME', 'device': 'DEVICE', 'status': 'STATUS', 'ipv4': 'IPv4 ADDRESS'}
     
     # Add SSID column if any interface has SSID
     has_ssid = any(i.get('ssid') for i in interfaces)
     if has_ssid:
-        columns.insert(3, 'ssid')
+        insert_pos = 3 if not show_extended else 3
+        columns.insert(insert_pos, 'ssid')
         headers['ssid'] = 'SSID'
     
     # Add IPv6 if requested
@@ -295,18 +1074,15 @@ def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_i
     col_widths = {}
     for col in columns:
         if col == 'ssid':
-            # SSID column width
             ssid_values = [i.get('ssid', '') or '' for i in interfaces]
             col_widths[col] = max(len(headers[col]), max(len(s) for s in ssid_values) if ssid_values else 0)
         else:
             col_widths[col] = max(len(headers[col]), max(len(str(i.get(col, '-'))) for i in interfaces))
     
     # Print header
-    header_parts = []
-    for col in columns:
-        header_parts.append(f"{headers[col]:<{col_widths[col]}}")
-    
+    header_parts = [f"{headers[col]:<{col_widths[col]}}" for col in columns]
     header_line = "  ".join(header_parts)
+    
     if use_color:
         print(f"{Colors.HEADER_BOLD}{header_line}{Colors.RESET}")
     else:
@@ -327,7 +1103,6 @@ def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_i
         for col in columns:
             value = str(interface.get(col, '-'))
             
-            # Handle SSID - show empty if None
             if col == 'ssid':
                 value = interface.get('ssid') or '-'
             
@@ -341,14 +1116,14 @@ def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_i
             elif col == 'device':
                 colored_value = colorize_text(value, Colors.GRAY, use_color)
                 padding = col_widths[col] - len(value)
-            elif col == 'mac':
-                colored_value = colorize_text(value, Colors.CYAN, use_color)
-                padding = col_widths[col] - len(value)
             elif col in ['ipv4', 'ipv6']:
                 colored_value = colorize_text(value, Colors.BLUE, use_color)
                 padding = col_widths[col] - len(value)
             elif col == 'ssid':
                 colored_value = colorize_text(value, Colors.YELLOW, use_color)
+                padding = col_widths[col] - len(value)
+            elif col in ['speed', 'mtu', 'uptime']:
+                colored_value = colorize_text(value, Colors.CYAN, use_color)
                 padding = col_widths[col] - len(value)
             else:
                 colored_value = value
@@ -358,23 +1133,293 @@ def print_table(interfaces: List[Dict[str, str]], use_color: bool = True, show_i
         
         print("  ".join(row_parts))
 
+def print_basic_info(interfaces: List[Dict], use_color: bool, show_ipv6: bool):
+    """Print basic interface information"""
+    print_table(interfaces, use_color=use_color, show_ipv6=show_ipv6, show_extended=False)
+    
+    # Print gateway
+    gateway_ip, gateway_iface = get_default_gateway()
+    if gateway_ip:
+        print()
+        gateway_text = f"Default Gateway: {gateway_ip}"
+        if gateway_iface:
+            gateway_text += f" (via {gateway_iface})"
+        
+        if use_color:
+            print(f"{Colors.CYAN}{gateway_text}{Colors.RESET}")
+        else:
+            print(gateway_text)
+
+def print_full_info(interfaces: List[Dict], use_color: bool, show_ipv6: bool):
+    """Print full network information"""
+    # Print extended interface table
+    print_table(interfaces, use_color=use_color, show_ipv6=show_ipv6, show_extended=True)
+    
+    # Print gateway
+    gateway_ip, gateway_iface = get_default_gateway()
+    if gateway_ip:
+        print()
+        gateway_text = f"Default Gateway: {gateway_ip}"
+        if gateway_iface:
+            gateway_text += f" (via {gateway_iface})"
+        
+        if use_color:
+            print(f"{Colors.CYAN}{gateway_text}{Colors.RESET}")
+        else:
+            print(gateway_text)
+    
+    # Network Information Section
+    print_section_header("Network Information", use_color)
+    
+    dns_servers = get_dns_servers()
+    dns_text = ', '.join(dns_servers) if dns_servers else 'None configured'
+    print(f"DNS Servers: {colorize_text(dns_text, Colors.BLUE, use_color)}")
+    
+    print("\nFetching public IP information...")
+    public_info = get_public_ip_info()
+    print(f"Public IP: {colorize_text(public_info['ip'], Colors.CYAN, use_color)}")
+    print(f"ISP: {colorize_text(public_info['isp'], Colors.WHITE, use_color)}")
+    print(f"ASN: {colorize_text(public_info['asn'], Colors.MAGENTA, use_color)}")
+    location_text = f"{public_info['city']}, {public_info['country']}"
+    print(f"Location: {colorize_text(location_text, Colors.YELLOW, use_color)}")
+    
+    # Security & Connectivity
+    print(f"\n{colorize_text('Security & Connectivity:', Colors.HEADER_BOLD, use_color)}")
+    
+    vpn_status = check_vpn_status(interfaces)
+    vpn_color = Colors.GREEN if "Connected" in vpn_status else Colors.YELLOW
+    print(f"  VPN: {colorize_text(vpn_status, vpn_color, use_color)}")
+    
+    proxy_status = check_proxy_status()
+    proxy_color = Colors.CYAN if "Configured" in proxy_status else Colors.GRAY
+    print(f"  Proxy: {colorize_text(proxy_status, proxy_color, use_color)}")
+    
+    firewall_status = check_firewall_status()
+    fw_color = Colors.GREEN if "Active" in firewall_status else Colors.YELLOW
+    print(f"  Firewall: {colorize_text(firewall_status, fw_color, use_color)}")
+    
+    # Local Network Devices
+    print_section_header("Local Network Devices", use_color)
+    
+    devices = get_local_devices()
+    if devices:
+        # Add current device with hostname
+        current_hostname = socket.gethostname()
+        for iface in interfaces:
+            if iface['status'] == 'UP' and iface['ipv4'] != '-':
+                ip = iface['ipv4'].split('/')[0]
+                # Check if not already in list
+                if not any(d['ip'] == ip for d in devices):
+                    devices.append({
+                        'ip': ip,
+                        'mac': iface['mac'],
+                        'interface': iface['device'],
+                        'description': f"This Device ({current_hostname})"
+                    })
+        
+        print(f"Found {len(devices)} device(s):\n")
+        for device in devices:
+            ip_colored = colorize_text(f"{device['ip']:<15}", Colors.CYAN, use_color)
+            desc_colored = colorize_text(device['description'], Colors.WHITE, use_color)
+            print(f"  • {ip_colored} - {desc_colored}")
+    else:
+        print("No devices found in ARP table")
+
+def print_routes(use_color: bool):
+    """Print routing table"""
+    print_section_header("Routing Table", use_color)
+    
+    routes = get_routing_table()
+    if not routes:
+        print("No routes found")
+        return
+    
+    # Calculate column widths
+    col_widths = {
+        'destination': max(len('DESTINATION'), max(len(r['destination']) for r in routes)),
+        'gateway': max(len('GATEWAY'), max(len(r['gateway']) for r in routes)),
+        'interface': max(len('INTERFACE'), max(len(r['interface']) for r in routes)),
+        'metric': max(len('METRIC'), len('100'))
+    }
+    
+    # Print header
+    header = f"{'DESTINATION':<{col_widths['destination']}}  {'GATEWAY':<{col_widths['gateway']}}  {'INTERFACE':<{col_widths['interface']}}  {'METRIC':<{col_widths['metric']}}"
+    if use_color:
+        print(f"{Colors.HEADER_BOLD}{header}{Colors.RESET}")
+    else:
+        print(header)
+    
+    # Print separator
+    total_width = sum(col_widths.values()) + 6
+    separator = '─' * total_width
+    if use_color:
+        print(f"{Colors.HEADER}{separator}{Colors.RESET}")
+    else:
+        print(separator)
+    
+    # Print routes
+    for route in routes:
+        dest = colorize_text(f"{route['destination']:<{col_widths['destination']}}", Colors.CYAN, use_color)
+        gw = colorize_text(f"{route['gateway']:<{col_widths['gateway']}}", Colors.BLUE, use_color)
+        iface = colorize_text(f"{route['interface']:<{col_widths['interface']}}", Colors.WHITE, use_color)
+        metric = f"{route['metric']:<{col_widths['metric']}}"
+        
+        route_line = f"{dest}  {gw}  {iface}  {metric}"
+        if route['type'] == 'default':
+            route_line += f"  {colorize_text('(default)', Colors.GREEN, use_color)}"
+        else:
+            route_line += f"  {colorize_text('(local)', Colors.GRAY, use_color)}"
+        
+        print(route_line)
+
+def print_ports(use_color: bool):
+    """Print open ports"""
+    print_section_header("Open Ports (Listening Services)", use_color)
+    
+    print("Scanning for open ports...")
+    ports = get_open_ports()
+    
+    if not ports:
+        print("No listening ports found")
+        return
+    
+    print(f"\nFound {len(ports)} listening port(s):\n")
+    
+    # Calculate column widths
+    col_widths = {
+        'port': max(len('PORT'), max(len(p['port']) for p in ports)),
+        'protocol': len('PROTOCOL'),
+        'service': max(len('SERVICE'), max(len(p['service']) for p in ports)),
+        'process': max(len('PROCESS'), max(len(p['process']) for p in ports))
+    }
+    
+    # Print header
+    header = f"{'PORT':<{col_widths['port']}}  {'PROTOCOL':<{col_widths['protocol']}}  {'SERVICE':<{col_widths['service']}}  {'PROCESS':<{col_widths['process']}}"
+    if use_color:
+        print(f"{Colors.HEADER_BOLD}{header}{Colors.RESET}")
+    else:
+        print(header)
+    
+    # Print separator
+    total_width = sum(col_widths.values()) + 6
+    separator = '─' * total_width
+    if use_color:
+        print(f"{Colors.HEADER}{separator}{Colors.RESET}")
+    else:
+        print(separator)
+    
+    # Print ports
+    for port in ports:
+        port_colored = colorize_text(f"{port['port']:<{col_widths['port']}}", Colors.CYAN, use_color)
+        proto_colored = colorize_text(f"{port['protocol']:<{col_widths['protocol']}}", Colors.BLUE, use_color)
+        service_colored = colorize_text(f"{port['service']:<{col_widths['service']}}", Colors.YELLOW, use_color)
+        process_colored = colorize_text(f"{port['process']:<{col_widths['process']}}", Colors.WHITE, use_color)
+        
+        print(f"{port_colored}  {proto_colored}  {service_colored}  {process_colored}")
+
+def print_dns_info(interfaces: List[Dict], use_color: bool):
+    """Print DNS information and tests"""
+    print_section_header("DNS Configuration", use_color)
+    
+    dns_servers = get_dns_servers()
+    if dns_servers:
+        print("Configured DNS Servers:")
+        for dns in dns_servers:
+            print(f"  • {colorize_text(dns, Colors.CYAN, use_color)}")
+    else:
+        print("No DNS servers configured")
+    
+    # DNS Resolution Test
+    print_section_header("DNS Resolution Test", use_color)
+    print("Testing DNS resolution...")
+    
+    results = test_dns_resolution()
+    
+    for result in results:
+        domain_colored = colorize_text(f"{result['domain']:<20}", Colors.WHITE, use_color)
+        if result['status'] == 'success':
+            status_icon = colorize_text('✓', Colors.GREEN, use_color)
+            ip_colored = colorize_text(result['ip'], Colors.CYAN, use_color)
+            latency_colored = colorize_text(f"({result['latency']})", Colors.GRAY, use_color)
+            print(f"  {domain_colored} → {ip_colored} {status_icon} {latency_colored}")
+        else:
+            status_icon = colorize_text('✗', Colors.RED, use_color)
+            print(f"  {domain_colored} → {status_icon} Failed")
+    
+    # DNS Leak Check
+    print_section_header("DNS Leak Check", use_color)
+    
+    leak_result = check_dns_leak(interfaces)
+    
+    if leak_result['status'] == 'no_vpn':
+        print(f"{colorize_text('ℹ', Colors.YELLOW, use_color)}  {leak_result['message']}")
+    elif leak_result['status'] == 'leak':
+        print(f"{colorize_text('⚠', Colors.RED, use_color)}  {colorize_text(leak_result['message'], Colors.RED, use_color)}")
+        print(f"\nYour DNS servers: {', '.join(leak_result['dns_servers'])}")
+        print("These appear to be public DNS servers, not VPN provider DNS.")
+        print("Your DNS queries may be visible to your ISP.")
+    else:
+        print(f"{colorize_text('✓', Colors.GREEN, use_color)}  {colorize_text(leak_result['message'], Colors.GREEN, use_color)}")
+        print(f"Using DNS servers: {', '.join(leak_result['dns_servers'])}")
+
+def export_json(interfaces: List[Dict], show_ipv6: bool, output_file: str = 'netinfo-output.json'):
+    """Export all information to JSON file"""
+    data = {
+        'timestamp': datetime.now().isoformat(),
+        'interfaces': interfaces,
+        'gateway': {
+            'ip': get_default_gateway()[0],
+            'interface': get_default_gateway()[1]
+        },
+        'network_info': {
+            'dns_servers': get_dns_servers(),
+            'public_ip': get_public_ip_info()
+        },
+        'security': {
+            'vpn': check_vpn_status(interfaces),
+            'proxy': check_proxy_status(),
+            'firewall': check_firewall_status()
+        },
+        'local_devices': get_local_devices(),
+        'routes': get_routing_table(),
+        'open_ports': get_open_ports(),
+        'dns_tests': {
+            'resolution': test_dns_resolution(),
+            'leak_check': check_dns_leak(interfaces)
+        }
+    }
+    
+    try:
+        with open(output_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"{Colors.GREEN}✓{Colors.RESET} Network information exported to: {Colors.CYAN}{output_file}{Colors.RESET}")
+        return True
+    except Exception as e:
+        print(f"{Colors.RED}✗ Error exporting to JSON: {e}{Colors.RESET}")
+        return False
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Network Interface Information Tool',
+        prog='netinfo',
+        description='🌐 Network Interface Information Tool - A comprehensive network analysis tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  netinfo                 Show network interfaces
-  netinfo --no-color      Show without colors
-  netinfo --ipv6          Include IPv6 addresses
-  netinfo -6              Short form for --ipv6
+        epilog=f"""
+\033[96m\033[1mCommands:\033[0m
+  \033[93mnetinfo\033[0m           Show basic interface information (default)
+  \033[93mnetinfo all\033[0m       Show comprehensive network information
+  \033[93mnetinfo routes\033[0m    Show routing table
+  \033[93mnetinfo ports\033[0m     Show open ports and listening services
+  \033[93mnetinfo dns\033[0m       Show DNS configuration and tests
+  \033[93mnetinfo json\033[0m      Export all information to JSON file
         """
     )
     
     parser.add_argument(
-        '--no-color',
-        action='store_true',
-        help='Disable colored output'
+        'command',
+        nargs='?',
+        default='basic',
+        choices=['basic', 'all', 'routes', 'ports', 'dns', 'json'],
+        help='Command to execute (default: basic)'
     )
     
     parser.add_argument(
@@ -384,16 +1429,60 @@ Examples:
     )
     
     parser.add_argument(
+        '--active', '-a',
+        action='store_true',
+        help='Show only active (UP) interfaces'
+    )
+    
+    parser.add_argument(
+        '--no-color',
+        action='store_true',
+        help='Disable colored output'
+    )
+    
+    parser.add_argument(
+        '--output', '-o',
+        default='netinfo-output.json',
+        help='Output file for JSON export (default: netinfo-output.json)'
+    )
+    
+    parser.add_argument(
         '--version', '-v',
         action='version',
-        version='netinfo 1.0.0'
+        version=f'netinfo 1.0.0 (Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})'
     )
     
     args = parser.parse_args()
+    use_color = not args.no_color
     
-    # Get and display interface information
-    interfaces = get_interface_info(show_ipv6=args.ipv6)
-    print_table(interfaces, use_color=not args.no_color, show_ipv6=args.ipv6)
+    # Get interface information
+    show_extended = args.command == 'all'
+    interfaces = get_interface_info(show_ipv6=args.ipv6, show_extended=show_extended)
+    
+    # Filter for active interfaces if requested
+    if args.active:
+        interfaces = [i for i in interfaces if i.get('status', '').upper() == 'UP']
+    
+    # Execute command
+    if args.command == 'basic':
+        print_basic_info(interfaces, use_color, args.ipv6)
+    
+    elif args.command == 'all':
+        print_full_info(interfaces, use_color, args.ipv6)
+    
+    elif args.command == 'routes':
+        print_routes(use_color)
+    
+    elif args.command == 'ports':
+        print_ports(use_color)
+    
+    elif args.command == 'dns':
+        print_dns_info(interfaces, use_color)
+    
+    elif args.command == 'json':
+        print("Gathering network information...")
+        interfaces_full = get_interface_info(show_ipv6=True, show_extended=True)
+        export_json(interfaces_full, True, args.output)
 
 if __name__ == '__main__':
     main()
