@@ -57,7 +57,7 @@ Before submitting:
 ## Development Setup
 
 ```bash
-git clone https://github.com/yourusername/netinfo.git
+git clone https://github.com/CyberSecHemmars/netinfo.git
 cd netinfo
 chmod +x netinfo
 ./netinfo  # Test it out
