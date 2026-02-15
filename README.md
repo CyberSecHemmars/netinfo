@@ -30,7 +30,7 @@ A modern network information tool for Linux that shows you everything about your
 
 ```bash
 # Download the script
-curl -O https://raw.githubusercontent.com/yourusername/netinfo/main/netinfo
+curl -O https://raw.githubusercontent.com/CyberSecHemmars/netinfo/main/netinfo
 chmod +x netinfo
 
 # Move it to your system path
@@ -43,7 +43,7 @@ netinfo
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/netinfo.git
+git clone https://github.com/CyberSecHemmars/netinfo.git
 cd netinfo
 chmod +x netinfo
 sudo cp netinfo /usr/local/bin/
