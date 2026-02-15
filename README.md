@@ -30,7 +30,7 @@ A clean, colorful network interface information tool for Linux. A modern alterna
 curl -O https://raw.githubusercontent.com/CyberSecHemmars/netinfo/main/netinfo
 chmod +x netinfo
 
-# Move to system path (optional)
+# Move to system path
 sudo mv netinfo /usr/local/bin/
 
 # Run
