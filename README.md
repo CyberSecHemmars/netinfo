@@ -101,46 +101,6 @@ Disable colors (for scripts):
 netinfo --no-color
 ```
 
-## What you'll see
-
-### Network Interfaces
-Shows all your network connections with:
-- **Name** - Friendly name (WiFi, Ethernet, etc.)
-- **Device** - Technical name (wlan0, eth0, etc.)
-- **Status** - Whether it's UP (connected) or DOWN
-- **IP Address** - Your local IP address
-- **WiFi Network** - Name of connected WiFi (if applicable)
-- **Speed** - Connection speed (in full view)
-- **MAC Address** - Hardware address
-
-### Local Network Devices
-Lists all devices connected to your network:
-- **Gateway Router** - Your router with admin page link
-- **Mobile devices** - Phones and tablets (shows hostname if available)
-- **Computers** - Other computers on the network
-- **This Device** - Your own computer
-
-Devices with "Private MAC" are using privacy features (common on phones).
-
-### Network Information
-- Public IP address
-- Internet provider (ISP)
-- Location (city and country)
-- DNS servers
-
-### Security Status
-- VPN connection status
-- Proxy configuration
-- Firewall status
-
-### Open Ports
-Shows which network services are running on your computer (SSH, web servers, etc.)
-
-### DNS Tests
-- Tests if DNS is working properly
-- Checks for DNS leaks (if using VPN)
-- Shows response times
-
 ## Requirements
 
 - Linux operating system
@@ -156,31 +116,6 @@ sudo apt install wireless-tools  # Ubuntu/Debian
 sudo dnf install wireless-tools  # Fedora
 sudo pacman -S wireless_tools    # Arch Linux
 ```
-
-## Tips
-
-**Finding devices on your network:** Run `netinfo all` and scroll to the "Local Network Devices" section.
-
-**Accessing your router:** Look for "Gateway Router (Admin: http://...)" in the device list and use that URL.
-
-**Checking VPN connection:** Run `netinfo all` and look at the "Security & Connectivity" section.
-
-**Troubleshooting DNS:** Run `netinfo dns` to test your DNS servers.
-
-**Getting device hostnames:** If devices show as "Mobile Device (Private MAC)", they're using privacy protection. You can disable this in your phone's WiFi settings (tap your network → Privacy → Use device MAC).
-
-## Understanding the Output
-
-**Colors:**
-- 🟢 Green - Active/Good
-- 🔴 Red - Inactive/Problem
-- 🟡 Yellow - Warning/Unknown
-- 🔵 Blue - Information
-
-**Status meanings:**
-- **UP** - Interface is active and connected
-- **DOWN** - Interface is not connected
-- **UNKNOWN** - Status cannot be determined
 
 **Private MAC:** Your phone is using a privacy feature that hides its real hardware address. This is good for security but makes device identification harder.
 
@@ -210,7 +145,7 @@ MIT License - Free to use and modify
 
 ## Version
 
-Current version: 1.0.0
+Current version: 2.0.0
 
 ---
 
