@@ -63,6 +63,29 @@ chmod +x netinfo
 sudo cp netinfo /usr/local/bin/
 ```
 
+## Uninstallation
+
+### Using the Uninstaller
+
+```bash
+cd netinfo
+chmod +x uninstall.sh
+sudo ./uninstall.sh     # If installed system-wide
+# OR
+./uninstall.sh          # If installed for user only
+```
+
+### Manual Uninstall
+
+```bash
+# If installed system-wide
+sudo rm /usr/local/bin/netinfo
+
+# If installed for user
+rm ~/.local/bin/netinfo
+```
+
+
 ## Usage
 
 ### Basic Commands
