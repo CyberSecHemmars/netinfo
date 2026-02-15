@@ -18,15 +18,8 @@ A clean, colorful network interface information tool for Linux. A modern alterna
 
 ## Screenshot
 
-```
-NAME           DEVICE   MAC ADDRESS        SSID        STATUS  IPv4 ADDRESS    
-───────────────────────────────────────────────────────────────────────────────
-Loopback       lo       00:00:00:00:00:00  -           UP      127.0.0.1/8     
-Ethernet       eth0     52:54:00:12:34:56  -           UP      192.168.1.100/24
-WiFi           wlan0    a4:5e:60:c8:9a:bc  MyHomeWiFi  UP      10.0.0.45/24    
-VPN Tunnel     tun0     -                  -           UP      10.8.0.2/24     
-Docker Bridge  docker0  02:42:3f:8e:d1:a7  -           DOWN    -               
-```
+<img width="1006" height="360" alt="Screenshot_20260215_142739" src="https://github.com/user-attachments/assets/5af1aec3-a655-45d9-8402-15142ef0fc47" />
+
 
 ## Installation
 
@@ -39,6 +32,9 @@ chmod +x netinfo
 
 # Move to system path (optional)
 sudo mv netinfo /usr/local/bin/
+
+# Run
+netinfo
 ```
 
 ### Manual Install
